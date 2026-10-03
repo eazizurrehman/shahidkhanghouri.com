@@ -1,0 +1,154 @@
+commit-msg:
+  commands:
+    commitlint:
+      run: pn exec commitlint --edit {1}
+
+pre-commit:
+  parallel: true
+  commands:
+    typecheck:
+      run: pn typecheck
+      stage_fixed: true
+
+    lint:
+      run: pn biome:check
+      stage_fixed: true
+
+    check-markdown-mirrors:
+      glob: "app/**/page.{tsx,md}"
+      run: |
+        unpaired=""
+
+        for file in {staged_files}; do
+          case "$file" in
+            *.tsx) counterpart="${file%.tsx}.md" ;;
+            *.md) counterpart="${file%.md}.tsx" ;;
+          esac
+
+          if [ ! -f "$counterpart" ]; then
+            unpaired="$unpaired$file needs $counterpart
+        "
+          fi
+        done
+
+        if [ -n "$unpaired" ]; then
+          echo "Error: every page must have a markdown mirror beside it."
+          echo "$unpaired"
+          exit 1
+        fi
+
+    check-llms-txt:
+      glob: "app/**/page.md"
+      run: |
+        sitemap="app/llms.txt/content.md"
+        missing=""
+
+        for file in {staged_files}; do
+          route="${file#app/}"
+          route="${route%page.md}"
+          route="${route%/}"
+          route="${route:-index}"
+
+          if ! grep -qF "/$route.md" "$sitemap"; then
+            missing="$missing/$route.md
+        "
+          fi
+        done
+
+        if [ -n "$missing" ]; then
+          echo "Error: these routes are missing from $sitemap:"
+          echo "$missing"
+          exit 1
+        fi
+
+    forbid-process-env:
+      glob: "*.{ts,tsx}"
+      exclude:
+        - "env.ts"
+      run: |
+        if grep -nE '\bprocess\.env\b' {staged_files}; then
+          echo "Error: read env through the validated 'env' object from @/env, not process.env."
+          exit 1
+        fi
+
+    forbid-env-files:
+      glob:
+        - ".env*"
+        - "**/.env*"
+      exclude:
+        - ".env.example"
+        - "**/.env.example"
+      run: |
+        echo "Error: refusing to commit environment files:"
+        printf '%s\n' {staged_files}
+        exit 1
+
+    scan-secrets:
+      run: |
+        if ! command -v gitleaks >/dev/null 2>&1; then
+          echo "Error: gitleaks is not installed, so staged changes cannot be scanned for secrets."
+          echo "Install it from https://github.com/gitleaks/gitleaks, or re-run with LEFTHOOK=0 to skip."
+          exit 1
+        fi
+
+        gitleaks git --staged --verbose
+
+    forbid-conflict-markers:
+      run: |
+        if grep -In '^\(<\{7\}\|>\{7\}\)\( \|$\)' {staged_files}; then
+          echo "Error: staged files contain merge conflict markers."
+          exit 1
+        fi
+
+    check-file-size:
+      exclude:
+        - "public/*"
+        - "**/public/*"
+      run: |
+        oversized="$(find {staged_files} -maxdepth 0 -size +1M)"
+
+        if [ -n "$oversized" ]; then
+          echo "Error: these staged files exceed 1MB:"
+          echo "$oversized"
+          exit 1
+        fi
+
+    protect-branch:
+      skip:
+        - merge
+      run: |
+        protected="main master prod production staging"
+        branch="$(git rev-parse --abbrev-ref HEAD)"
+
+        for name in $protected; do
+          if [ "$branch" = "$name" ]; then
+            echo "Error: direct commits to $branch are not allowed."
+            exit 1
+          fi
+        done
+
+pre-push:
+  parallel: true
+  commands:
+    build:
+      run: pn build
+
+    knip:
+      run: pn knip
+
+post-checkout:
+  commands:
+    install-dependencies:
+      run: pn install --frozen-lockfile
+      glob: "pnpm-lock.yaml"
+
+post-merge:
+  commands:
+    install-dependencies:
+      run: pn install --frozen-lockfile
+      glob: "pnpm-lock.yaml"
+
+post-rewrite:
+  commands:
+    install-dependencies:
+      run: pn install --frozen-lockfile
