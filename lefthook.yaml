@@ -15,7 +15,9 @@ pre-commit:
       stage_fixed: true
 
     check-markdown-mirrors:
-      glob: "app/**/page.{tsx,md}"
+      glob:
+        - "app/**/page.tsx"
+        - "app/**/page.md"
       run: |
         unpaired=""
 
